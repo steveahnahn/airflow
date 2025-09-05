@@ -36,9 +36,10 @@ import annotationPlugin from "chartjs-plugin-annotation";
 import { useMemo, useRef } from "react";
 import { Bar } from "react-chartjs-2";
 import { useTranslation } from "react-i18next";
-import { useParams, useNavigate, useLocation } from "react-router-dom";
+import { useParams, useNavigate, useLocation, useSearchParams } from "react-router-dom";
 
 import { useTaskInstanceServiceGetTaskInstances } from "openapi/queries";
+import { SearchParamsKeys } from "src/constants/searchParams";
 import { useColorMode } from "src/context/colorMode";
 import { useOpenGroups } from "src/context/openGroups";
 import { useTimezone } from "src/context/timezone";
@@ -76,6 +77,7 @@ const MIN_BAR_WIDTH = 10;
 
 export const Gantt = ({ limit }: Props) => {
   const { dagId = "", groupId: selectedGroupId, runId = "", taskId: selectedTaskId } = useParams();
+  const [searchParams] = useSearchParams();
   const { openGroupIds } = useOpenGroups();
   const { t: translate } = useTranslation("common");
   const { selectedTimezone } = useTimezone();
@@ -97,6 +99,9 @@ export const Gantt = ({ limit }: Props) => {
   const { data: dagStructure, isLoading: structureLoading } = useGridStructure({ limit });
   const selectedRun = gridRuns?.find((run) => run.run_id === runId);
   const refetchInterval = useAutoRefresh({ dagId });
+
+  const tryNumberParam = searchParams.get(SearchParamsKeys.TRY_NUMBER);
+  const selectedTryNumber = tryNumberParam === null ? undefined : parseInt(tryNumberParam, 10);
 
   // Get grid summaries for groups (which have min/max times)
   const { data: gridTiSummaries, isLoading: summariesLoading } = useGridTiSummaries({
@@ -129,7 +134,12 @@ export const Gantt = ({ limit }: Props) => {
     }
 
     const gridSummaries = gridTiSummaries?.task_instances ?? [];
-    const taskInstances = taskInstancesData?.task_instances ?? [];
+    const allTaskInstances = taskInstancesData?.task_instances ?? [];
+
+    const taskInstances =
+      selectedTryNumber === undefined
+        ? allTaskInstances
+        : allTaskInstances.filter((ti) => ti.try_number === selectedTryNumber);
 
     return flatNodes
       .map((node) => {
@@ -170,7 +180,7 @@ export const Gantt = ({ limit }: Props) => {
         return undefined;
       })
       .filter((item) => item !== undefined);
-  }, [flatNodes, gridTiSummaries, taskInstancesData, selectedTimezone, isLoading, runId]);
+  }, [flatNodes, gridTiSummaries, taskInstancesData, selectedTimezone, isLoading, runId, selectedTryNumber]);
 
   const chartData = useMemo(
     () => ({

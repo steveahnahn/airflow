@@ -38,7 +38,7 @@ import { Bar } from "react-chartjs-2";
 import { useTranslation } from "react-i18next";
 import { useParams, useNavigate, useLocation, useSearchParams } from "react-router-dom";
 
-import { useTaskInstanceServiceGetTaskInstances } from "openapi/queries";
+import { useTaskInstanceServiceGetTaskInstances, useTaskInstanceServiceGetMappedTaskInstanceTries } from "openapi/queries";
 import { SearchParamsKeys } from "src/constants/searchParams";
 import { useColorMode } from "src/context/colorMode";
 import { useOpenGroups } from "src/context/openGroups";
@@ -119,14 +119,33 @@ export const Gantt = ({ limit }: Props) => {
     undefined,
     {
       enabled: Boolean(dagId),
-      refetchInterval: (query) =>
-        query.state.data?.task_instances.some((ti) => isStatePending(ti.state)) ? refetchInterval : false,
+      refetchInterval: (query) => {
+        const hasPendingTasks = query.state.data?.task_instances.some((ti) => isStatePending(ti.state)) ?? false;
+        const hasRunPendingTasks = Boolean(selectedRun && isStatePending(selectedRun.state));
+
+        return (hasPendingTasks || hasRunPendingTasks) ? refetchInterval : false;
+      },
+    },
+  );
+
+  // Get historical try data when a specific try is selected
+  const { data: tryHistoryData, isLoading: tryHistoryLoading } = useTaskInstanceServiceGetMappedTaskInstanceTries(
+    {
+      dagId,
+      dagRunId: runId,
+      mapIndex: -1, // Non-mapped tasks use -1
+      taskId: selectedTaskId ?? "", // Only fetch if we have a selected task
+    },
+    undefined,
+    {
+      enabled: Boolean(selectedTaskId && selectedTryNumber !== undefined),
+      refetchInterval: false, // Don't auto-refresh historical data
     },
   );
 
   const { flatNodes } = useMemo(() => flattenNodes(dagStructure, openGroupIds), [dagStructure, openGroupIds]);
 
-  const isLoading = runsLoading || structureLoading || summariesLoading || tiLoading;
+  const isLoading = runsLoading || structureLoading || summariesLoading || tiLoading || tryHistoryLoading;
 
   const data = useMemo(() => {
     if (isLoading || runId === "") {
@@ -135,9 +154,12 @@ export const Gantt = ({ limit }: Props) => {
 
     const gridSummaries = gridTiSummaries?.task_instances ?? [];
     const allTaskInstances = taskInstancesData?.task_instances ?? [];
+    const tryHistoryInstances = tryHistoryData?.task_instances ?? [];
 
-    const taskInstances =
-      selectedTryNumber === undefined
+    // Use try history data when available and a specific try is selected
+    const taskInstances = selectedTryNumber !== undefined && tryHistoryInstances.length > 0
+      ? tryHistoryInstances.filter((ti) => ti.try_number === selectedTryNumber)
+      : selectedTryNumber === undefined
         ? allTaskInstances
         : allTaskInstances.filter((ti) => ti.try_number === selectedTryNumber);
 
@@ -146,15 +168,19 @@ export const Gantt = ({ limit }: Props) => {
         const gridSummary = gridSummaries.find((ti) => ti.task_id === node.id);
 
         if (node.isGroup && gridSummary) {
-          // Group node - use min/max times from grid summary
+          const groupTaskInstance = taskInstances.find((ti) => ti.task_id === node.id);
+          const stateToUse = selectedTryNumber !== undefined && groupTaskInstance
+            ? groupTaskInstance.state
+            : gridSummary.state;
+
           return {
             isGroup: true,
             isMapped: node.is_mapped,
-            state: gridSummary.state,
+            state: stateToUse,
             taskId: gridSummary.task_id,
             x: [
-              formatDate(gridSummary.min_start_date, selectedTimezone, "YYYY-MM-DD HH:mm:ss.SSS"),
-              formatDate(gridSummary.max_end_date, selectedTimezone, "YYYY-MM-DD HH:mm:ss.SSS"),
+              formatDate(gridSummary.min_start_date ?? undefined, selectedTimezone, "YYYY-MM-DD HH:mm:ss.SSS"),
+              formatDate(gridSummary.max_end_date ?? undefined, selectedTimezone, "YYYY-MM-DD HH:mm:ss.SSS"),
             ],
             y: gridSummary.task_id,
           };
@@ -169,8 +195,8 @@ export const Gantt = ({ limit }: Props) => {
               state: taskInstance.state,
               taskId: taskInstance.task_id,
               x: [
-                formatDate(taskInstance.start_date, selectedTimezone, "YYYY-MM-DD HH:mm:ss.SSS"),
-                formatDate(taskInstance.end_date, selectedTimezone, "YYYY-MM-DD HH:mm:ss.SSS"),
+                formatDate(taskInstance.start_date ?? undefined, selectedTimezone, "YYYY-MM-DD HH:mm:ss.SSS"),
+                formatDate(taskInstance.end_date ?? undefined, selectedTimezone, "YYYY-MM-DD HH:mm:ss.SSS"),
               ],
               y: taskInstance.task_id,
             };
@@ -180,7 +206,7 @@ export const Gantt = ({ limit }: Props) => {
         return undefined;
       })
       .filter((item) => item !== undefined);
-  }, [flatNodes, gridTiSummaries, taskInstancesData, selectedTimezone, isLoading, runId, selectedTryNumber]);
+  }, [flatNodes, gridTiSummaries, taskInstancesData, tryHistoryData, selectedTimezone, isLoading, runId, selectedTryNumber]);
 
   const chartData = useMemo(
     () => ({

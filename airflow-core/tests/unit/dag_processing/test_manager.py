@@ -1692,7 +1692,7 @@ class TestDagFileProcessorManager:
         last_runtime = manager._file_stats[file_info].last_duration
         statsd_timing_mock.assert_any_call(
             "dag_processing.last_duration",
-            last_runtime,
+            timedelta(seconds=last_runtime),
             tags={"bundle_name": bundle_name, "file_name": dag_filename[:-3]},
         )
 
@@ -3533,7 +3533,7 @@ class TestMultiTeamMetrics:
 
         mock_timing.assert_called_once_with(
             "dag_processing.last_duration",
-            1.5,
+            timedelta(seconds=1.5),
             tags={"bundle_name": "testing", "file_name": "dag", "team_name": "team_alpha"},
         )
 
@@ -3555,9 +3555,33 @@ class TestMultiTeamMetrics:
 
         mock_timing.assert_called_once_with(
             "dag_processing.last_duration",
-            1.5,
+            timedelta(seconds=1.5),
             tags={"bundle_name": "testing", "file_name": "dag"},
         )
+
+    @conf_vars({("core", "multi_team"): "false"})
+    @mock.patch("airflow.dag_processing.manager.stats.timing")
+    def test_process_parse_results_reports_duration_in_milliseconds(self, mock_timing):
+        """The timer is documented in milliseconds, but the parse duration is measured in seconds.
+
+        Every metrics backend forwards a bare number unchanged and converts only a timedelta, so
+        sending the raw seconds under-reports each parse by a factor of 1000.
+        """
+        from airflow.dag_processing.manager import process_parse_results
+
+        result = DagFileParsingResult(fileloc="/tmp/dag.py", serialized_dags=[])
+        process_parse_results(
+            run_duration=30.0,
+            finish_time=timezone.utcnow(),
+            run_count=0,
+            bundle_name="testing",
+            parsing_result=result,
+            relative_fileloc="dag.py",
+            team_name=None,
+        )
+
+        reported = mock_timing.call_args.args[1]
+        assert reported.total_seconds() * 1000 == 30_000
 
     @pytest.mark.parametrize(
         ("multi_team", "team_name", "expected_tags"),
